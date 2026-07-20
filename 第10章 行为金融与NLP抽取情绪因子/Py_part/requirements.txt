@@ -1,0 +1,1 @@
+yfinance==0.2.38pandas>=2.2numpy>=1.26matplotlib>=3.7scikit-learn>=1.4tatorch>=2.1transformers>=4.38tqdm

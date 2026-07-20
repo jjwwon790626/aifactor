@@ -1,0 +1,333 @@
+// #############基于Simnow免费1档期货数据获取代码################
+
+login("admin", "123456") 
+// listRemotePlugins()  // 用检查当前服务器全部插件状态 
+// installPlugin("ctp")   // 从DolphinDB官网下载安装ctp插件 
+try{loadPlugin("ctp") }catch(ex){print ex}  // 使用try-catch处理重复加载插件的异常，确保生产环境稳定性 
+use ops // 使用ops模块 
+go // 提前加载(不再提示)
+
+// CTP初始化应用数据
+config = {
+    "OutputElapsed": true, 
+    "ReceivedTime": true, 
+    "ConcatTime": true 
+}
+ip = " 182.254.243.31" // IP地址(simnow官网信息)
+tport = 30001 // TradeFront端口(simnow官网信息)
+mport = 30011 // MarketFront端口(simnow官网信息) 
+userID = '读者需自行替换此处信息' // 投资者ID(simnow个人注册信息)
+username = '读者需自行替换此处信息' // 用户昵称(simnow个人注册信息)
+password = '读者需自行替换此处信息' // 用户密码(simnow个人注册信息)
+brokerID = '9999' // 用户brokerID(simnow官网信息)
+appID = 'simnow_client_test' // 用户appID(simnow官网信息)
+authCode = '0000000000000000' // 用户认证码(simnow官网信息)
+// 此处部分信息已经由25年6月的simnow官网信息配置完成
+
+marketTBCapacity = 1000000
+ctpSubTBName = "ctpMarketDataStream" 
+ctpSubType = "marketData" //(DolphinDB官网信息)
+stdStreamTBName = "ctpMarketStream" 
+stdDestDBName = "dfs://ctp_market_data" 
+stdDestTBName = "ctp_market" 
+
+// 连接CTP交易数据页，查询当前可交易品种信息(ids)。
+ctpcategory = ctp::queryInstrument(ip, tport, userID, password, brokerID, appID, authCode)
+ids = exec instrumentID from ctpcategory
+conn = ctp::connect(ip, mport, config) 
+tb = ctp::getSchema(conn, ctpSubType) 
+enableTableShareAndPersistence(
+    table = streamTable(marketTBCapacity:0, tb.name, tb.typeString), 
+    tableName = ctpSubTBName, 
+    cacheSize = marketTBCapacity, 
+    preCache = 0) 
+go
+
+
+// 初始化数据库
+if(existsDatabase(stdDestDBName)){
+    dropDatabase(stdDestDBName)
+} 
+
+create database "dfs://ctp_market_data"  
+partitioned by VALUE(2024.01.01..2026.01.31), HASH([SYMBOL, 40]) 
+engine='TSDB'  
+atomic='CHUNK'  
+
+// 构建分区表
+create table "dfs://ctp_market_data"."ctp_market"( 
+    // ------------ 基础字段 ------------
+    trade_date              DATE 
+    exchange_id             SYMBOL
+    unified_code            SYMBOL
+    // ------------ 价格字段 ------------
+    last_price              DOUBLE
+    pre_settlement_price    DOUBLE
+    pre_close_price         DOUBLE
+    pre_open_price          DOUBLE
+    open_price              DOUBLE
+    high_price              DOUBLE
+    low_price               DOUBLE
+    // ------------ 量能字段 ------------
+    volume                  LONG
+    turnover                DOUBLE
+    open_interest           DOUBLE
+    close_price             DOUBLE
+    settlement_price        DOUBLE
+    // ------------ 涨跌计算 ------------
+    change_rate             DOUBLE
+    upper_limit_price       DOUBLE
+    lower_limit_price       DOUBLE
+    // ------------ 希腊值 --------------
+    pre_delta               DOUBLE
+    current_delta           DOUBLE
+    // ------------ 时间戳 --------------
+    update_time             SECOND
+    update_ms               LONG
+    // ------------ 订单簿数据 ----------
+    bid_price               DOUBLE[]
+    bid_volume              LONG[]
+    ask_price               DOUBLE[]
+    ask_volume              LONG[]
+    // ------------ 衍生字段 ------------
+    avgerage_price          DOUBLE
+    action_date             DATE
+    ticker                  SYMBOL
+    exchange_inst_id        SYMBOL
+    // ------------ 风控边界 ------------
+    banding_upper_price     DOUBLE
+    banding_lower_price     DOUBLE
+    // ------------ 精确时间戳 ----------
+    data_time               TIME
+)
+partitioned by trade_date, unified_code, 
+sortColumns=[`unified_code,`action_date, `data_time], 
+keepDuplicates=ALL  
+go
+
+colNames = loadTable(stdDestDBName, stdDestTBName).schema().colDefs.name 
+colTypes = loadTable(stdDestDBName, stdDestTBName).schema().colDefs.typeString  
+tb = streamTable(marketTBCapacity:0, colNames, colTypes) 
+enableTableShareAndPersistence(
+    table=tb,
+    tableName=stdStreamTBName,
+    cacheSize=marketTBCapacity,
+    preCache=0)
+go 
+
+// 数据标准化函数
+def ctpMarketHandler(msg, stdStreamTBName) { // 定义1个函数两个输入
+    // 从msg入表格式化输出到中间值ctpProcess
+    ctpProcess = select  
+                    TradingDay as trade_date,
+                    ExchangeID as exchange_id,
+                    InstrumentID as unified_code,
+                    LastPrice as LastPrice,
+                    PreSettlementPrice as PreSettlementPrice,
+                    PreClosePrice as PreClosePrice,
+                    PreOpenInterest as PreOpenInterest,
+                    OpenPrice as OpenPrice,
+                    HighestPrice as HighestPrice,
+                    LowestPrice as LowestPrice,
+                    Volume as Volume,
+                    Turnover as Turnover,
+                    OpenInterest as OpenInterest,
+                    ClosePrice as ClosePrice,
+                    SettlementPrice as SettlementPrice,
+                    (LastPrice-PreSettlementPrice)\PreSettlementPrice as change_rate,
+                    UpperLimitPrice as UpperLimitPrice,
+                    LowerLimitPrice as LowerLimitPrice,
+                    PreDelta as PreDelta,
+                    CurrDelta as CurrDelta,
+                    UpdateTime as UpdateTime,
+                    UpdateMillisec as UpdateMillisec,
+                    fixedLengthArrayVector(BidPrice1.nullFill(0), BidPrice2.nullFill(0), BidPrice3.nullFill(0), BidPrice4.nullFill(0), BidPrice5.nullFill(0)) as BidPrice,
+                    fixedLengthArrayVector(BidVolume1, BidVolume2, BidVolume3, BidVolume4, BidVolume5) as BidVolume,
+                    fixedLengthArrayVector(AskPrice1.nullFill(0), AskPrice2.nullFill(0), AskPrice3.nullFill(0), AskPrice4.nullFill(0), AskPrice5.nullFill(0)) as AskPrice,
+                    fixedLengthArrayVector(AskVolume1, AskVolume2, AskVolume3, AskVolume4, AskVolume5) as AskVolume,
+                    AveragePrice as AveragePrice,
+                    ActionDay as action_date,
+                    InstrumentID as InstrumentID,
+                    ExchangeInstID as ExchangeInstID,
+                    BandingUpperPrice as BandingUpperPrice,
+                    BandingLowerPrice as BandingLowerPrice,
+                    tradeTime as tradeTime
+                from msg
+    objByName(stdStreamTBName).append!(ctpProcess)
+}
+
+// 订阅持久化原始行情流数据表
+subscribeTable(
+    tableName=ctpSubTBName, 
+    actionName=ctpSubTBName + "Std",
+    offset=-1,  
+    handler=ctpMarketHandler{, stdStreamTBName},  
+    msgAsTable=true, 
+    batchSize=10000, 
+    throttle=0.001, 
+    hash=0,  
+    reconnect=true 
+    ) 
+
+// 订阅持久化标准化行情流数据表
+subscribeTable(
+    tableName=stdStreamTBName, 
+    actionName=stdStreamTBName + "ToDfs", 
+    offset=-1,  
+    handler=loadTable(stdDestDBName, stdDestTBName), 
+    msgAsTable=true, 
+    batchSize=5000, 
+    throttle=1, 
+    hash=1,  
+    reconnect=true 
+    ) 
+go
+
+// CTP 订阅直连
+ctp::subscribe(conn, ctpSubType, objByName(ctpSubTBName), ids)
+ctp::getStatus(conn)  
+go  
+
+// 清理多余变量
+undef(`ip `port `userID `username `password `brokerID `appID `authCode `config)
+undef(`marketTBCapacity `ctpSubTBName `ctpSubType `stdStreamTBName `stdDestTBName `conn `ex `colNames `colTypes `stdDestDBName `ctpcategory `tb)
+go
+
+
+// ######################################################
+// #######################数据清洗########################
+// ######################################################
+// 人工手动查看到出现50条重复期货数据到手再进行下部分的代码
+
+// 模块1初始化数据 
+marketTBCapacity = 2000000
+ctpSubinTBName = "ctpMarketStream"
+stdStreaminTBName = "ctpMarketStreamNo100" 
+unified = select unified_code, count(*) as count from ctpMarketStream  group by unified_code order by count desc 
+
+// 模块2建立并共享持久化表格模块
+colNames = ctpMarketStream .schema().colDefs.name // 列名
+colTypes = ctpMarketStream .schema().colDefs.typeString // 列类
+tb = streamTable(marketTBCapacity:0, colNames, colTypes) // 创建流数据表
+enableTableShareAndPersistence(
+    table=tb,
+    tableName=stdStreaminTBName,
+    cacheSize=marketTBCapacity,
+    preCache=0)
+
+
+// 选取前100个频次的期货数据并进行获取操作
+def ctpMarketNo100(msg, stdStreaminTBName, unified) { 
+    qihuo_data = select * from msg where strlen(unified_code) < 7
+    // qihuo_data = select * from msg where unified_code not like '%P%' and unified_code not like '%C%'  
+    codes = unified.unified_code[0:100] 
+    ctpMarketStreamSelectNo1 = select * from qihuo_data where unified_code in codes
+    objByName(stdStreaminTBName).append!(ctpMarketStreamSelectNo1)
+}
+
+
+// 订阅动作与连接表格操作
+subscribeTable(
+    tableName=ctpSubinTBName, 
+    actionName=ctpSubinTBName + "No100", 
+    offset=-1, 
+    handler=ctpMarketNo100{,stdStreaminTBName ,unified},  
+    msgAsTable=true, 
+    batchSize=10000, 
+    throttle=0.001, 
+    hash=2, 
+    reconnect=true) 
+
+
+//######################################################
+//#######################计算因子########################
+//######################################################
+// 自定义基础向量化运行函数
+def calculatePressDI(bid_price_levels, bid_volume_levels, ask_price_levels, ask_volume_levels){
+    // 初始数据设置
+    lambdaVal = 0.5;
+    epsilonVal = 1e-6;
+    // WAP公式计算 
+    wap_numerator_sum = (bid_price_levels * ask_volume_levels) + (ask_price_levels * bid_volume_levels) 
+    wap_denominator_sum = (bid_volume_levels) + (ask_volume_levels) 
+    wap_L5 = wap_numerator_sum \ wap_denominator_sum
+    // Dij 公式计算(A2)
+    DIJ_levels = (bid_volume_levels - ask_volume_levels) \ wap_denominator_sum
+    // 非线性买卖压力权重(B权)
+    bid_press_press = exp(-lambdaVal * abs(max(bid_price_levels, wap_L5) - wap_L5) + epsilonVal) 
+    ask_press_press = exp(-lambdaVal * abs(min(ask_price_levels, wap_L5) - wap_L5) + epsilonVal)
+    // 买卖压力差
+    final_numerator = rowSum(bid_volume_levels * (1 + DIJ_levels) * bid_press_press) 
+    final_denominator = rowSum(ask_volume_levels * (1 - DIJ_levels) * ask_press_press ) 
+    press_DI = tanh(log(final_numerator \ final_denominator))
+    // 信号生成
+    press = iif(press_DI >= 0.5, 1,iif(press_DI <= -0.5, -1, 0))
+    return press
+}
+
+@state
+def averagecalculatePressDI(bid_price, bid_volume, ask_price, ask_volume, lag){
+    press = calculatePressDI(bid_price, bid_volume, ask_price, ask_volume)
+    mpress = msum(press, lag, 1)
+    return iif(mpress >= 0.5, 1,iif(mpress <= -0.5, -1, 0))
+}
+
+averagecalculatePressDI(ctpNo100data[`bidPrice], ctpNo100data[`bidVol], ctpNo100data[`askPrice], ctpNo100data[`askVol], 2)
+
+
+//######################################################
+//#######################计算引擎########################
+//######################################################
+
+// 流输入表(由于先前创建过需要对应输入的表格，此处只用进行“引入操作”)
+positionmanagement_inputTable=table(1:0,schema(ctpMarketStreamNo100).colDefs.name,schema(ctpMarketStreamNo100).colDefs.typeString)
+
+//流输出表(输出表逻辑上不可能先前创建过，所以此处进行0到1的创建过程)
+////创建引擎outputTable部分
+stdStreaminTBName='ctpMarketStreamNo100Points'
+marketTBCapacity=2000000
+colNames=`date`time`ticker`lastprice`timestamp`press1`zPress1
+colTypes=[DATE,TIME,SYMBOL,DOUBLE,DATETIME,DOUBLE,DOUBLE]
+table1=streamTable(marketTBCapacity:0,colNames,colTypes)
+
+//启用流输出表共享与持久化
+enableTableShareAndPersistence( // 启用表共享与持久化
+    table=table1,
+    tableName=stdStreaminTBName,
+    cacheSize=marketTBCapacity,
+    preCache=0
+    )
+go
+
+//算子
+positionmanagement_metrics=<[data_time,ticker,last_price,
+concatDateTime(trade_date,data_time)as datetime,
+Press1(bid_price,bid_volume,ask_price,ask_volume)[0],
+ZPress1(bid_price,bid_volume,ask_price,ask_volume,2)[0]
+]>
+
+//引擎重置与创建
+try{dropStreamEngine("positionmanagement_REG")}catch(ex){print(ex)}
+
+//计算引擎期货指标计算系统(响应式状态引擎)
+positionmanagement_ReactiveStateEngine=createReactiveStateEngine(name="positionmanagement_REG",metrics=positionmanagement_metrics,dummyTable=ctpMarketStreamNo100,outputTable=ctpMarketStreamNo100Points,keyColumn=["trade_date"], keepOrder=true)
+//objByName(outputTBName)直接指向持久化表
+go
+
+subscribe Table(
+table Name='ctpMarketStreamNo100', 
+action Name="ctpMarketStreamNo100Signal",
+offset=-1, 
+handler=positionmanagement_ReactiveStateEngine,
+msg As Table=true, 
+batch Size=10000, 
+throttle=0.001, 
+hash=3, 
+reconnect=true) 
+go//20ms
+
+// DolphinDB数据库版本：DolphinDB Linux64 V 3.00.2.3 JIT 
+// CTP插件版本：ctp Linux-X86-3.00.2-3.00.2.7 
+// 电脑操作系统：Windows11家庭中文版(版本更新时间：2025年2月16日)
+// 电脑操作子系统：Linux LPTP 5.15.167.4-microsoft-standard-WSL2 #1 SMP Tue Nov 5 00:21:55 UTC 2024 x86_64 x86_64 x86_64 GNU/Linux
+// linux操作软件：Ubuntu V 2404.1.68.0 
