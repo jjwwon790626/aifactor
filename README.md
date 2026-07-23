@@ -1,5 +1,8 @@
-清华大学出版社签约，《AI驱动下的高频因子挖掘》图书配套相关代码 这里发布最新的勘误和后续配套的代码和本书相关衍生的量化策略；图书答疑和bug修改请联系，作者邮箱：jianwu790626@gmail.com 相关图书配套视频请查看B站 up主 高频交易dragon，https://www.bilibili.com/video/BV1onn3zcEuL/?spm_id_from=333.1387.0.0&vd_source=d1843ed64e51a478d1f97d03226b09fa  
-ppt与code百度网盘下载：永久有效，欢迎转发！
+清华大学出版社签约，《AI驱动下的高频因子挖掘》图书配套相关代码 这里发布最新的勘误和后续配套的代码和本书相关衍生的量化策略；
+
+图书答疑和bug修改请联系，作者邮箱：jianwu790626@gmail.com 
+相关图书配套视频请查看B站 up主 高频交易dragon，https://www.bilibili.com/video/BV1onn3zcEuL/?spm_id_from=333.1387.0.0&vd_source=d1843ed64e51a478d1f97d03226b09fa  
+图书配套ppt与code百度网盘下载：永久有效，欢迎转发！
 链接: https://pan.baidu.com/s/1Tq8NpkG3cKJoehbKWgjVWQ?pwd=hmt2 提取码: hmt2
 
 后续工作：
@@ -9,7 +12,11 @@ ppt与code百度网盘下载：永久有效，欢迎转发！
 4，应用双动量在ETF/期货+大威量龙操盘法做CTA策略；
 5，应用截面因子选期+大威量龙操盘法+波动率预测+库存管理  做高频grid；
 
-图书购买【加入因子挖掘team】请加助理微信15867197707
+图书购买：
+加入因子挖掘team
+rqdai.com 大威量龙软件使用
+**请加助理微信15867197707**
+
 
 订单流软件展示：
 ![足迹图+量龙通道+阻力带+反转概率统计+大单气泡+大压单](rqdai/8.png)
